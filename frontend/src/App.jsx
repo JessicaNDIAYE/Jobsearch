@@ -4,7 +4,7 @@ import { useState, useEffect, useCallback, useRef } from 'react'
 // Constants
 // ---------------------------------------------------------------------------
 
-const API = 'http://localhost:5000/api'
+const API = import.meta.env.VITE_API_URL || 'http://localhost:5000/api'
 
 const STATUS_META = {
   saved:     { label: 'Saved',     color: '#3B82F6', bg: 'rgba(59,130,246,0.15)' },
@@ -592,7 +592,7 @@ function stringToColor(str = '') {
 // ---------------------------------------------------------------------------
 
 function AITab({ onSaveJob }) {
-  const apiKey = import.meta.env.VITE_ANTHROPIC_API_KEY || ''
+  const apiKey = import.meta.env.VITE_MISTRAL_API_KEY || ''
   const [keywords, setKeywords] = useState('Junior Data Scientist AI Engineer')
   const [location, setLocation] = useState('Lyon, France')
   const [level, setLevel] = useState('junior')
@@ -603,7 +603,7 @@ function AITab({ onSaveJob }) {
 
   const search = async () => {
     if (!apiKey) {
-      setError('VITE_ANTHROPIC_API_KEY not set. Add it to frontend/.env')
+      setError('VITE_MISTRAL_API_KEY not set. Add it to frontend/.env')
       return
     }
     setLoading(true)
@@ -611,27 +611,28 @@ function AITab({ onSaveJob }) {
     setResults([])
     try {
       const userMsg = `Find ${level} job opportunities for: ${keywords}. Location preference: ${location}. Return JSON array only.`
-      const res = await fetch('https://api.anthropic.com/v1/messages', {
+      const res = await fetch('https://api.mistral.ai/v1/chat/completions', {
         method: 'POST',
         headers: {
-          'x-api-key': apiKey,
-          'anthropic-version': '2023-06-01',
-          'content-type': 'application/json',
-          'anthropic-dangerous-direct-browser-access': 'true',
+          'Authorization': `Bearer ${apiKey}`,
+          'Content-Type': 'application/json',
         },
         body: JSON.stringify({
-          model: 'claude-haiku-4-5-20251001',
-          max_tokens: 2048,
-          system: AI_SYSTEM_PROMPT,
-          messages: [{ role: 'user', content: userMsg }],
+          model: 'mistral-large-latest',
+          temperature: 0.3,
+          max_tokens: 2000,
+          messages: [
+            { role: 'system', content: AI_SYSTEM_PROMPT },
+            { role: 'user', content: userMsg },
+          ],
         }),
       })
       if (!res.ok) {
         const e = await res.json()
-        throw new Error(e.error?.message || 'API error')
+        throw new Error(e.message || e.error?.message || 'API error')
       }
       const data = await res.json()
-      const text = data.content?.[0]?.text || ''
+      const text = data.choices?.[0]?.message?.content || ''
       const jobs = JSON.parse(text)
       if (!Array.isArray(jobs)) throw new Error('Invalid response format')
       setResults(jobs)
@@ -675,7 +676,7 @@ function AITab({ onSaveJob }) {
           <span style={{ fontSize: '28px' }}>🤖</span>
           <div>
             <h2 style={{ fontSize: '20px', fontWeight: 700, color: P.text }}>AI Job Finder</h2>
-            <p style={{ color: P.muted, fontSize: '13px' }}>Powered by Claude — finds tailored junior AI/Data positions</p>
+            <p style={{ color: P.muted, fontSize: '13px' }}>Powered by Mistral — finds tailored junior AI/Data positions</p>
           </div>
         </div>
         {!apiKey && (
@@ -684,7 +685,7 @@ function AITab({ onSaveJob }) {
             borderRadius: '8px', padding: '10px 14px', marginTop: '12px',
             color: '#F97316', fontSize: '13px',
           }}>
-            ⚠️ Set <code style={{ background: 'rgba(255,255,255,0.1)', padding: '2px 6px', borderRadius: '4px' }}>VITE_ANTHROPIC_API_KEY</code> in <code style={{ background: 'rgba(255,255,255,0.1)', padding: '2px 6px', borderRadius: '4px' }}>frontend/.env</code> to use AI features.
+            ⚠️ Set <code style={{ background: 'rgba(255,255,255,0.1)', padding: '2px 6px', borderRadius: '4px' }}>VITE_MISTRAL_API_KEY</code> in <code style={{ background: 'rgba(255,255,255,0.1)', padding: '2px 6px', borderRadius: '4px' }}>frontend/.env</code> to use AI features.
           </div>
         )}
       </div>
