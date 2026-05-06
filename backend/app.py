@@ -3,6 +3,8 @@ import uuid
 import json
 import hashlib
 import sqlite3
+import urllib.request
+import urllib.parse
 from datetime import datetime
 from io import BytesIO
 from contextlib import contextmanager
@@ -409,6 +411,63 @@ def export_jobs(user):
     fname = f"jobtracker_{user['username']}_{datetime.utcnow().strftime('%Y%m%d')}.xlsx"
     return send_file(buf, as_attachment=True, download_name=fname,
                      mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+
+# ---------------------------------------------------------------------------
+# Real job search — Adzuna API proxy
+# ---------------------------------------------------------------------------
+
+@app.route("/api/search", methods=["GET"])
+@require_auth
+def search_jobs(user):
+    app_id  = os.environ.get("ADZUNA_APP_ID", "")
+    app_key = os.environ.get("ADZUNA_APP_KEY", "")
+    if not app_id or not app_key:
+        return jsonify({"error": "ADZUNA_APP_ID and ADZUNA_APP_KEY not configured on server"}), 503
+
+    what     = request.args.get("q", "data scientist junior")
+    where    = request.args.get("location", "France")
+    country  = request.args.get("country", "fr")
+    page     = request.args.get("page", "1")
+    per_page = request.args.get("per_page", "10")
+
+    params = urllib.parse.urlencode({
+        "app_id":          app_id,
+        "app_key":         app_key,
+        "what":            what,
+        "where":           where,
+        "results_per_page": per_page,
+        "content-type":    "application/json",
+        "sort_by":         "date",
+    })
+    url = f"https://api.adzuna.com/v1/api/jobs/{country}/search/{page}?{params}"
+
+    try:
+        with urllib.request.urlopen(url, timeout=10) as resp:
+            raw = json.loads(resp.read().decode())
+    except Exception as e:
+        return jsonify({"error": f"Adzuna request failed: {str(e)}"}), 502
+
+    jobs = []
+    for r in raw.get("results", []):
+        jobs.append({
+            "id":          r.get("id", ""),
+            "title":       r.get("title", ""),
+            "company":     r.get("company", {}).get("display_name", ""),
+            "location":    r.get("location", {}).get("display_name", ""),
+            "description": r.get("description", ""),
+            "url":         r.get("redirect_url", ""),
+            "salary_min":  r.get("salary_min"),
+            "salary_max":  r.get("salary_max"),
+            "created":     r.get("created", "")[:10],
+            "category":    r.get("category", {}).get("label", ""),
+        })
+
+    return jsonify({
+        "jobs":  jobs,
+        "total": raw.get("count", 0),
+        "page":  int(page),
+    })
+
 
 # ---------------------------------------------------------------------------
 # Health check

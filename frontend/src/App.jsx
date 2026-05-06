@@ -461,149 +461,211 @@ function JobsTable({ jobs, onEdit, onDelete, search, statusFilter }) {
 // ---------------------------------------------------------------------------
 
 function AITab({ onSaveJob }) {
-  const apiKey = import.meta.env.VITE_MISTRAL_API_KEY || ''
-  const [keywords, setKeywords] = useState('Junior Data Scientist AI Engineer')
-  const [location, setLocation] = useState('Lyon, France')
-  const [level, setLevel] = useState('junior')
+  const [keywords, setKeywords] = useState('data scientist junior')
+  const [location, setLocation] = useState('Lyon')
+  const [country, setCountry] = useState('fr')
   const [results, setResults] = useState([])
+  const [total, setTotal] = useState(0)
+  const [page, setPage] = useState(1)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
   const [savedIds, setSavedIds] = useState(new Set())
+  const [expanded, setExpanded] = useState(null)
 
-  const search = async () => {
-    if (!apiKey) { setError('VITE_MISTRAL_API_KEY not set in frontend/.env'); return }
-    setLoading(true); setError(''); setResults([])
+  const doSearch = async (p = 1) => {
+    setLoading(true); setError('')
+    if (p === 1) setResults([])
     try {
-      const res = await fetch('https://api.mistral.ai/v1/chat/completions', {
-        method: 'POST',
-        headers: { 'Authorization': `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          model: 'mistral-large-latest', temperature: 0.3, max_tokens: 2000,
-          messages: [
-            { role: 'system', content: AI_SYSTEM_PROMPT },
-            { role: 'user', content: `Find ${level} job opportunities for: ${keywords}. Location: ${location}. Return JSON array only.` },
-          ],
-        }),
-      })
-      if (!res.ok) { const e = await res.json(); throw new Error(e.message || 'API error') }
-      const data = await res.json()
-      const raw = data.choices?.[0]?.message?.content || '[]'
-      const cleaned = raw.replace(/```json\s*/gi, '').replace(/```\s*/gi, '').trim()
-      const jobs = JSON.parse(cleaned)
-      if (!Array.isArray(jobs)) throw new Error('Invalid response')
-      setResults(jobs)
+      const params = new URLSearchParams({ q: keywords, location, country, page: p, per_page: 10 })
+      const data = await apiFetch(`/search?${params}`)
+      setResults(prev => p === 1 ? data.jobs : [...prev, ...data.jobs])
+      setTotal(data.total)
+      setPage(p)
     } catch (err) { setError(err.message) }
     finally { setLoading(false) }
   }
 
-  const saveJob = async (job, idx) => {
+  const saveJob = async (job, id) => {
+    const salary = job.salary_min && job.salary_max
+      ? `${Math.round(job.salary_min/1000)}k–${Math.round(job.salary_max/1000)}k €/an`
+      : job.salary_min ? `${Math.round(job.salary_min/1000)}k+ €/an` : ''
     try {
       await onSaveJob({
-        company: job.company || '', job_title: job.job_title || '', type: job.type || 'Startup',
-        industry: job.industry || '', location: job.location || '',
-        notes: `${job.notes || ''}\n\nSearch: ${job.search_query || ''}`.trim(),
-        job_url: '', salary: '', status: 'saved',
+        company:   job.company || '',
+        job_title: job.title || '',
+        type:      'Autre',
+        industry:  job.category || '',
+        location:  job.location || '',
+        notes:     job.description || '',
+        job_url:   job.url || '',
+        salary,
+        status: 'saved',
       })
-      setSavedIds(s => new Set([...s, idx]))
+      setSavedIds(s => new Set([...s, id]))
     } catch (err) { alert('Failed to save: ' + err.message) }
   }
 
+  const COUNTRIES = [
+    { value: 'fr', label: '🇫🇷 France' },
+    { value: 'gb', label: '🇬🇧 UK' },
+    { value: 'us', label: '🇺🇸 USA' },
+    { value: 'de', label: '🇩🇪 Germany' },
+    { value: 'ca', label: '🇨🇦 Canada' },
+  ]
+
   return (
     <div>
-      {/* Header card */}
+      {/* Search bar */}
       <div style={{ background: T.surface, border: `1px solid ${T.border}`, borderRadius: '12px', padding: '20px', marginBottom: '20px' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '16px' }}>
-          <div style={{ width: '36px', height: '36px', borderRadius: '10px', background: T.accent, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '18px' }}>✨</div>
+          <div style={{ width: '36px', height: '36px', borderRadius: '10px', background: T.accent, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '18px' }}>🔍</div>
           <div>
-            <h2 style={{ fontSize: '15px', fontWeight: 700, color: T.text }}>AI Job Finder</h2>
-            <p style={{ color: T.muted, fontSize: '12px' }}>Powered by Mistral — tailored junior AI & Data positions</p>
+            <h2 style={{ fontSize: '15px', fontWeight: 700, color: T.text }}>Job Search</h2>
+            <p style={{ color: T.muted, fontSize: '12px' }}>Vraies offres via Adzuna — cliquez pour postuler directement</p>
           </div>
         </div>
-
-        {!apiKey && (
-          <div style={{ background: '#FFFBEB', border: '1px solid #FDE68A', borderRadius: '8px', padding: '10px 14px', marginBottom: '16px', color: '#92400E', fontSize: '13px' }}>
-            ⚠️ Set <code style={{ background: '#FEF3C7', padding: '1px 5px', borderRadius: '3px' }}>VITE_MISTRAL_API_KEY</code> in <code style={{ background: '#FEF3C7', padding: '1px 5px', borderRadius: '3px' }}>frontend/.env</code>
-          </div>
-        )}
-
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr auto auto', gap: '10px', alignItems: 'end' }}>
+        <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr 1fr auto', gap: '10px', alignItems: 'end' }}>
           <div>
-            <label style={labelStyle}>Keywords / Roles</label>
-            <input value={keywords} onChange={e => setKeywords(e.target.value)} placeholder="Junior Data Scientist…" style={inputStyle} />
+            <label style={labelStyle}>Mots-clés / Poste</label>
+            <input value={keywords} onChange={e => setKeywords(e.target.value)}
+              onKeyDown={e => e.key === 'Enter' && doSearch(1)}
+              placeholder="data scientist junior, AI engineer…" style={inputStyle} />
           </div>
           <div>
-            <label style={labelStyle}>Location</label>
-            <input value={location} onChange={e => setLocation(e.target.value)} placeholder="Lyon, Paris, Remote…" style={inputStyle} />
+            <label style={labelStyle}>Ville</label>
+            <input value={location} onChange={e => setLocation(e.target.value)}
+              onKeyDown={e => e.key === 'Enter' && doSearch(1)}
+              placeholder="Lyon, Paris, Remote…" style={inputStyle} />
           </div>
           <div>
-            <label style={labelStyle}>Level</label>
-            <select value={level} onChange={e => setLevel(e.target.value)} style={{ ...inputStyle, width: 'auto', appearance: 'none', paddingRight: '28px' }}>
-              <option value="junior">Junior</option>
-              <option value="intern">Intern</option>
+            <label style={labelStyle}>Pays</label>
+            <select value={country} onChange={e => setCountry(e.target.value)}
+              style={{ ...inputStyle, appearance: 'none' }}>
+              {COUNTRIES.map(c => <option key={c.value} value={c.value}>{c.label}</option>)}
             </select>
           </div>
-          <div style={{ paddingBottom: '1px' }}>
+          <div>
             <label style={{ ...labelStyle, visibility: 'hidden' }}>_</label>
-            <button onClick={search} disabled={loading || !apiKey} style={{
+            <button onClick={() => doSearch(1)} disabled={loading} style={{
               padding: '9px 20px', borderRadius: '8px', border: 'none',
-              background: !apiKey || loading ? '#E8E6E0' : T.accent,
-              color: T.text, cursor: !apiKey || loading ? 'not-allowed' : 'pointer',
+              background: loading ? '#E8E6E0' : T.accent,
+              color: T.text, cursor: loading ? 'not-allowed' : 'pointer',
               fontFamily: 'DM Sans, sans-serif', fontWeight: 700, fontSize: '14px',
-              whiteSpace: 'nowrap',
-            }}>
-              {loading ? 'Searching…' : 'Find Jobs'}
-            </button>
+            }}>{loading && results.length === 0 ? 'Recherche…' : 'Chercher'}</button>
           </div>
         </div>
       </div>
 
       {error && (
-        <div style={{ background: '#FEF2F2', border: '1px solid #FECACA', borderRadius: '8px', padding: '10px 14px', marginBottom: '16px', color: '#EF4444', fontSize: '13px' }}>{error}</div>
+        <div style={{ background: '#FEF2F2', border: '1px solid #FECACA', borderRadius: '8px', padding: '10px 14px', marginBottom: '16px', color: '#EF4444', fontSize: '13px' }}>
+          {error.includes('ADZUNA') ? (
+            <>⚠️ Configure <strong>ADZUNA_APP_ID</strong> et <strong>ADZUNA_APP_KEY</strong> dans Railway Variables.<br/>Crée un compte gratuit sur <strong>developer.adzuna.com</strong></>
+          ) : error}
+        </div>
       )}
 
-      {loading && (
+      {loading && results.length === 0 && (
         <div style={{ textAlign: 'center', padding: '40px', color: T.muted }}>
           <div style={{ width: '32px', height: '32px', border: `3px solid ${T.border}`, borderTopColor: T.accent, borderRadius: '50%', animation: 'spin 0.7s linear infinite', margin: '0 auto 12px' }} />
-          Mistral is finding opportunities…
+          Recherche en cours…
           <style>{`@keyframes spin{to{transform:rotate(360deg)}}`}</style>
         </div>
       )}
 
       {results.length > 0 && (
         <div style={{ background: T.surface, border: `1px solid ${T.border}`, borderRadius: '12px', overflow: 'hidden' }}>
-          <div style={{ padding: '14px 20px', borderBottom: `1px solid ${T.border}`, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-            <span style={{ fontSize: '13px', fontWeight: 600, color: T.text }}>{results.length} opportunities found</span>
+          <div style={{ padding: '12px 20px', borderBottom: `1px solid ${T.border}`, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <span style={{ fontSize: '13px', fontWeight: 600, color: T.text }}>
+              {results.length} offres affichées
+              {total > 0 && <span style={{ color: T.muted, fontWeight: 400 }}> sur {total.toLocaleString()} résultats</span>}
+            </span>
           </div>
-          {results.map((job, idx) => (
-            <div key={idx} style={{
-              padding: '16px 20px', borderBottom: idx < results.length - 1 ? `1px solid ${T.border}` : 'none',
-              display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '16px',
-              background: savedIds.has(idx) ? '#F0FDF4' : T.surface,
-              transition: 'background 0.15s',
-            }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '12px', flex: 1, minWidth: 0 }}>
-                <div style={{ width: '38px', height: '38px', borderRadius: '10px', flexShrink: 0, background: avatarColor(job.company), display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '15px', fontWeight: 700, color: '#fff' }}>
-                  {(job.company || '?')[0].toUpperCase()}
-                </div>
-                <div style={{ minWidth: 0 }}>
-                  <div style={{ fontWeight: 600, fontSize: '14px', color: T.text }}>{job.job_title}</div>
-                  <div style={{ color: T.muted, fontSize: '12px', marginBottom: '4px' }}>{job.company} · {job.location} · {job.industry}</div>
-                  {job.notes && <div style={{ color: T.soft, fontSize: '12px', lineHeight: 1.5 }}>{job.notes}</div>}
-                  {job.search_query && <div style={{ marginTop: '5px' }}><span style={{ fontSize: '11px', color: T.muted, background: T.bg, padding: '2px 8px', borderRadius: '4px', border: `1px solid ${T.border}` }}>🔍 {job.search_query}</span></div>}
+
+          {results.map((job) => {
+            const isExp = expanded === job.id
+            const isSaved = savedIds.has(job.id)
+            const salary = job.salary_min || job.salary_max
+              ? `${job.salary_min ? Math.round(job.salary_min/1000)+'k' : '?'} – ${job.salary_max ? Math.round(job.salary_max/1000)+'k' : '?'} €/an`
+              : null
+
+            return (
+              <div key={job.id} style={{
+                borderBottom: `1px solid ${T.border}`,
+                background: isSaved ? '#F0FDF4' : T.surface,
+                transition: 'background 0.15s',
+              }}>
+                {/* Main row */}
+                <div style={{ padding: '14px 20px', display: 'flex', alignItems: 'flex-start', gap: '14px' }}>
+                  <div style={{
+                    width: '40px', height: '40px', borderRadius: '10px', flexShrink: 0,
+                    background: avatarColor(job.company),
+                    display: 'flex', alignItems: 'center', justifyContent: 'center',
+                    fontSize: '16px', fontWeight: 700, color: '#fff',
+                  }}>{(job.company || '?')[0].toUpperCase()}</div>
+
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap', marginBottom: '3px' }}>
+                      <span style={{ fontWeight: 700, fontSize: '14px', color: T.text }}>{job.title}</span>
+                      {job.category && (
+                        <span style={{ padding: '2px 8px', borderRadius: '20px', fontSize: '11px', fontWeight: 600, background: '#EEF2FF', color: '#6366F1', border: '1px solid #C7D2FE' }}>{job.category}</span>
+                      )}
+                    </div>
+                    <div style={{ color: T.muted, fontSize: '13px', display: 'flex', gap: '12px', flexWrap: 'wrap' }}>
+                      {job.company && <span>🏢 {job.company}</span>}
+                      {job.location && <span>📍 {job.location}</span>}
+                      {salary && <span style={{ color: '#10B981', fontWeight: 600 }}>💰 {salary}</span>}
+                      {job.created && <span style={{ color: T.soft }}>📅 {job.created}</span>}
+                    </div>
+
+                    {/* Description preview / expanded */}
+                    {job.description && (
+                      <div style={{ marginTop: '6px' }}>
+                        <p style={{ fontSize: '13px', color: '#374151', lineHeight: 1.55,
+                          overflow: isExp ? 'visible' : 'hidden',
+                          display: isExp ? 'block' : '-webkit-box',
+                          WebkitLineClamp: isExp ? 'unset' : 3,
+                          WebkitBoxOrient: 'vertical',
+                        }}>{job.description}</p>
+                        <button onClick={() => setExpanded(isExp ? null : job.id)}
+                          style={{ background: 'none', border: 'none', color: T.accentDark, cursor: 'pointer', fontSize: '12px', fontWeight: 600, padding: '3px 0', fontFamily: 'DM Sans' }}>
+                          {isExp ? '▲ Voir moins' : '▼ Voir plus'}
+                        </button>
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Actions */}
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', flexShrink: 0 }}>
+                    <a href={job.url} target="_blank" rel="noopener noreferrer" style={{
+                      padding: '7px 16px', borderRadius: '8px', border: `1px solid ${T.border}`,
+                      background: T.bg, color: T.text, textDecoration: 'none',
+                      fontFamily: 'DM Sans', fontWeight: 600, fontSize: '13px',
+                      textAlign: 'center', whiteSpace: 'nowrap',
+                    }}>Postuler ↗</a>
+                    <button onClick={() => saveJob(job, job.id)} disabled={isSaved} style={{
+                      padding: '7px 16px', borderRadius: '8px', border: 'none',
+                      background: isSaved ? '#DCFCE7' : T.accent,
+                      color: isSaved ? '#16A34A' : T.text,
+                      cursor: isSaved ? 'default' : 'pointer',
+                      fontFamily: 'DM Sans', fontWeight: 600, fontSize: '13px',
+                      whiteSpace: 'nowrap',
+                    }}>{isSaved ? '✓ Sauvé' : '+ Sauvegarder'}</button>
+                  </div>
                 </div>
               </div>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexShrink: 0 }}>
-                <span style={{ padding: '3px 10px', borderRadius: '20px', fontSize: '11px', fontWeight: 600, background: '#F5F3FF', color: '#8B5CF6', border: '1px solid #DDD6FE' }}>{job.type}</span>
-                <button onClick={() => saveJob(job, idx)} disabled={savedIds.has(idx)} style={{
-                  padding: '7px 14px', borderRadius: '8px', border: 'none',
-                  background: savedIds.has(idx) ? '#DCFCE7' : T.accent,
-                  color: savedIds.has(idx) ? '#16A34A' : T.text,
-                  cursor: savedIds.has(idx) ? 'default' : 'pointer',
-                  fontFamily: 'DM Sans, sans-serif', fontWeight: 600, fontSize: '13px',
-                }}>{savedIds.has(idx) ? '✓ Saved' : '+ Save'}</button>
-              </div>
+            )
+          })}
+
+          {/* Load more */}
+          {results.length < total && (
+            <div style={{ padding: '16px', textAlign: 'center' }}>
+              <button onClick={() => doSearch(page + 1)} disabled={loading} style={{
+                padding: '9px 28px', borderRadius: '8px', border: `1px solid ${T.border}`,
+                background: T.bg, color: T.text, cursor: 'pointer',
+                fontFamily: 'DM Sans', fontWeight: 600, fontSize: '14px',
+              }}>{loading ? 'Chargement…' : 'Charger plus'}</button>
             </div>
-          ))}
+          )}
         </div>
       )}
     </div>
