@@ -587,8 +587,9 @@ function AITab({ onSaveJob }) {
                 </div>
                 <div style={{ minWidth: 0 }}>
                   <div style={{ fontWeight: 600, fontSize: '14px', color: T.text }}>{job.job_title}</div>
-                  <div style={{ color: T.muted, fontSize: '12px' }}>{job.company} · {job.location} · {job.industry}</div>
-                  {job.notes && <div style={{ color: T.soft, fontSize: '12px', marginTop: '2px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{job.notes}</div>}
+                  <div style={{ color: T.muted, fontSize: '12px', marginBottom: '4px' }}>{job.company} · {job.location} · {job.industry}</div>
+                  {job.notes && <div style={{ color: T.soft, fontSize: '12px', lineHeight: 1.5 }}>{job.notes}</div>}
+                  {job.search_query && <div style={{ marginTop: '5px' }}><span style={{ fontSize: '11px', color: T.muted, background: T.bg, padding: '2px 8px', borderRadius: '4px', border: `1px solid ${T.border}` }}>🔍 {job.search_query}</span></div>}
                 </div>
               </div>
               <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexShrink: 0 }}>
