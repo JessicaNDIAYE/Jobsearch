@@ -15,11 +15,17 @@ from openpyxl.styles import (
 from openpyxl.utils import get_column_letter
 
 app = Flask(__name__)
-CORS(app, origins=[
+allowed_origins = [
     "http://localhost:5173",
     "http://localhost:3000",
-    os.environ.get("FRONTEND_URL", "*"),
-], supports_credentials=True)
+]
+frontend_url = os.environ.get("FRONTEND_URL", "")
+if frontend_url:
+    allowed_origins.append(frontend_url)
+
+CORS(app, origins=allowed_origins if frontend_url else "*",
+     methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+     allow_headers=["Content-Type", "Authorization"])
 
 DB_PATH = os.environ.get("DB_PATH", os.path.join(os.path.dirname(__file__), "jobtracker.db"))
 
