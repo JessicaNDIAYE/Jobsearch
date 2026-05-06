@@ -487,7 +487,9 @@ function AITab({ onSaveJob }) {
       })
       if (!res.ok) { const e = await res.json(); throw new Error(e.message || 'API error') }
       const data = await res.json()
-      const jobs = JSON.parse(data.choices?.[0]?.message?.content || '[]')
+      const raw = data.choices?.[0]?.message?.content || '[]'
+      const cleaned = raw.replace(/```json\s*/gi, '').replace(/```\s*/gi, '').trim()
+      const jobs = JSON.parse(cleaned)
       if (!Array.isArray(jobs)) throw new Error('Invalid response')
       setResults(jobs)
     } catch (err) { setError(err.message) }
