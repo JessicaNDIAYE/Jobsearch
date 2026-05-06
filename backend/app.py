@@ -411,10 +411,33 @@ def export_jobs(user):
                      mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
 # ---------------------------------------------------------------------------
+# Health check
+# ---------------------------------------------------------------------------
+
+@app.route("/api/health", methods=["GET"])
+def health():
+    try:
+        result = query("SELECT COUNT(*) as n FROM users", fetchone=True)
+        count = result["n"] if result else 0
+        return jsonify({
+            "status": "ok",
+            "db": "postgresql" if USE_PG else "sqlite",
+            "database_url_set": bool(DATABASE_URL),
+            "users": count,
+        })
+    except Exception as e:
+        return jsonify({"status": "error", "error": str(e)}), 500
+
+# ---------------------------------------------------------------------------
 # Entrypoint
 # ---------------------------------------------------------------------------
 
-init_db()
+try:
+    init_db()
+    print(f"✅ DB initialized ({'PostgreSQL' if USE_PG else 'SQLite'})")
+except Exception as e:
+    print(f"❌ init_db() FAILED: {e}")
+    raise
 
 if __name__ == "__main__":
     app.run(debug=True, port=int(os.environ.get("PORT", 5000)))
