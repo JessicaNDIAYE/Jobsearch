@@ -1,0 +1,530 @@
+import os
+import uuid
+import json
+import hashlib
+import sqlite3
+from datetime import datetime
+from io import BytesIO
+
+from flask import Flask, request, jsonify, send_file, g
+from flask_cors import CORS
+from openpyxl import Workbook
+from openpyxl.styles import (
+    PatternFill, Font, Alignment, Border, Side
+)
+from openpyxl.utils import get_column_letter
+
+app = Flask(__name__)
+CORS(app, resources={r"/api/*": {"origins": "*"}}, supports_credentials=True)
+
+DB_PATH = os.path.join(os.path.dirname(__file__), "jobtracker.db")
+
+DEMO_JOBS = [
+    {
+        "company": "Agicap",
+        "job_title": "Data Analyst Junior",
+        "type": "Scale-up",
+        "industry": "Fintech/SaaS",
+        "location": "Lyon",
+        "status": "saved",
+        "salary": "",
+        "job_url": "",
+        "notes": "Scale-up fintech en forte croissance, bonne culture data",
+        "tags": [],
+    },
+    {
+        "company": "Capgemini",
+        "job_title": "Junior AI Engineer",
+        "type": "Grande entreprise",
+        "industry": "Consulting/AI",
+        "location": "Lyon",
+        "status": "saved",
+        "salary": "",
+        "job_url": "",
+        "notes": "Missions variées en AI/Data, bonne école pour débuter",
+        "tags": [],
+    },
+    {
+        "company": "DataGenius",
+        "job_title": "Data Scientist",
+        "type": "PME",
+        "industry": "Data Science",
+        "location": "Lyon (Villeurbanne)",
+        "status": "saved",
+        "salary": "",
+        "job_url": "",
+        "notes": "Petite structure avec projets ML concrets",
+        "tags": [],
+    },
+    {
+        "company": "MILA",
+        "job_title": "Research Assistant",
+        "type": "Research Institute",
+        "industry": "AI Research",
+        "location": "Montreal",
+        "status": "saved",
+        "salary": "",
+        "job_url": "",
+        "notes": "Institut de recherche en IA de renommée mondiale, équipe de Bengio",
+        "tags": [],
+    },
+    {
+        "company": "Shopify",
+        "job_title": "Junior Data Scientist",
+        "type": "Big Tech",
+        "industry": "Data & e-commerce",
+        "location": "Canada (remote)",
+        "status": "saved",
+        "salary": "",
+        "job_url": "",
+        "notes": "Télétravail complet, stack data moderne, bonne rémunération",
+        "tags": [],
+    },
+]
+
+
+# ---------------------------------------------------------------------------
+# DB helpers
+# ---------------------------------------------------------------------------
+
+def get_db():
+    if "db" not in g:
+        conn = sqlite3.connect(DB_PATH)
+        conn.row_factory = sqlite3.Row
+        g.db = conn
+    return g.db
+
+
+@app.teardown_appcontext
+def close_db(exc=None):
+    db = g.pop("db", None)
+    if db is not None:
+        db.close()
+
+
+def init_db():
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    c = conn.cursor()
+    c.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS users (
+            id TEXT PRIMARY KEY,
+            username TEXT NOT NULL,
+            email TEXT UNIQUE NOT NULL,
+            password_hash TEXT NOT NULL,
+            created_at TEXT NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS sessions (
+            token TEXT PRIMARY KEY,
+            user_id TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            FOREIGN KEY (user_id) REFERENCES users(id)
+        );
+
+        CREATE TABLE IF NOT EXISTS saved_jobs (
+            id TEXT PRIMARY KEY,
+            user_id TEXT NOT NULL,
+            company TEXT,
+            type TEXT,
+            industry TEXT,
+            location TEXT,
+            notes TEXT,
+            job_title TEXT,
+            job_url TEXT,
+            salary TEXT,
+            status TEXT DEFAULT 'saved',
+            tags TEXT DEFAULT '[]',
+            created_at TEXT NOT NULL,
+            FOREIGN KEY (user_id) REFERENCES users(id)
+        );
+        """
+    )
+    conn.commit()
+    conn.close()
+
+
+# ---------------------------------------------------------------------------
+# Auth helpers
+# ---------------------------------------------------------------------------
+
+def hash_password(password: str) -> str:
+    return hashlib.sha256(password.encode()).hexdigest()
+
+
+def get_current_user():
+    auth = request.headers.get("Authorization", "")
+    if not auth.startswith("Bearer "):
+        return None
+    token = auth[7:]
+    db = get_db()
+    row = db.execute(
+        "SELECT u.* FROM sessions s JOIN users u ON s.user_id = u.id WHERE s.token = ?",
+        (token,),
+    ).fetchone()
+    return dict(row) if row else None
+
+
+def require_auth(f):
+    from functools import wraps
+
+    @wraps(f)
+    def wrapper(*args, **kwargs):
+        user = get_current_user()
+        if not user:
+            return jsonify({"error": "Unauthorized"}), 401
+        return f(user, *args, **kwargs)
+
+    return wrapper
+
+
+# ---------------------------------------------------------------------------
+# Routes – Auth
+# ---------------------------------------------------------------------------
+
+@app.route("/api/register", methods=["POST"])
+def register():
+    data = request.get_json()
+    username = (data.get("username") or "").strip()
+    email = (data.get("email") or "").strip().lower()
+    password = data.get("password") or ""
+
+    if not username or not email or not password:
+        return jsonify({"error": "All fields are required"}), 400
+
+    db = get_db()
+    existing = db.execute("SELECT id FROM users WHERE email = ?", (email,)).fetchone()
+    if existing:
+        return jsonify({"error": "Email already registered"}), 409
+
+    user_id = str(uuid.uuid4())
+    now = datetime.utcnow().isoformat()
+    db.execute(
+        "INSERT INTO users (id, username, email, password_hash, created_at) VALUES (?,?,?,?,?)",
+        (user_id, username, email, hash_password(password), now),
+    )
+
+    # Seed demo jobs
+    for job in DEMO_JOBS:
+        db.execute(
+            """INSERT INTO saved_jobs
+               (id, user_id, company, type, industry, location, notes,
+                job_title, job_url, salary, status, tags, created_at)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+            (
+                str(uuid.uuid4()),
+                user_id,
+                job["company"],
+                job["type"],
+                job["industry"],
+                job["location"],
+                job["notes"],
+                job["job_title"],
+                job["job_url"],
+                job["salary"],
+                job["status"],
+                json.dumps(job["tags"]),
+                now,
+            ),
+        )
+
+    token = str(uuid.uuid4())
+    db.execute(
+        "INSERT INTO sessions (token, user_id, created_at) VALUES (?,?,?)",
+        (token, user_id, now),
+    )
+    db.commit()
+    return jsonify({"token": token, "username": username, "email": email}), 201
+
+
+@app.route("/api/login", methods=["POST"])
+def login():
+    data = request.get_json()
+    email = (data.get("email") or "").strip().lower()
+    password = data.get("password") or ""
+
+    db = get_db()
+    user = db.execute(
+        "SELECT * FROM users WHERE email = ? AND password_hash = ?",
+        (email, hash_password(password)),
+    ).fetchone()
+    if not user:
+        return jsonify({"error": "Invalid email or password"}), 401
+
+    token = str(uuid.uuid4())
+    now = datetime.utcnow().isoformat()
+    db.execute(
+        "INSERT INTO sessions (token, user_id, created_at) VALUES (?,?,?)",
+        (token, user["id"], now),
+    )
+    db.commit()
+    return jsonify({"token": token, "username": user["username"], "email": user["email"]})
+
+
+@app.route("/api/logout", methods=["POST"])
+@require_auth
+def logout(user):
+    auth = request.headers.get("Authorization", "")
+    token = auth[7:]
+    db = get_db()
+    db.execute("DELETE FROM sessions WHERE token = ?", (token,))
+    db.commit()
+    return jsonify({"ok": True})
+
+
+# ---------------------------------------------------------------------------
+# Routes – Jobs
+# ---------------------------------------------------------------------------
+
+def row_to_job(row):
+    d = dict(row)
+    try:
+        d["tags"] = json.loads(d.get("tags") or "[]")
+    except Exception:
+        d["tags"] = []
+    return d
+
+
+@app.route("/api/jobs", methods=["GET"])
+@require_auth
+def get_jobs(user):
+    db = get_db()
+    rows = db.execute(
+        "SELECT * FROM saved_jobs WHERE user_id = ? ORDER BY created_at DESC",
+        (user["id"],),
+    ).fetchall()
+    return jsonify([row_to_job(r) for r in rows])
+
+
+@app.route("/api/jobs", methods=["POST"])
+@require_auth
+def create_job(user):
+    data = request.get_json()
+    job_id = str(uuid.uuid4())
+    now = datetime.utcnow().isoformat()
+    tags = json.dumps(data.get("tags") or [])
+    db = get_db()
+    db.execute(
+        """INSERT INTO saved_jobs
+           (id, user_id, company, type, industry, location, notes,
+            job_title, job_url, salary, status, tags, created_at)
+           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+        (
+            job_id,
+            user["id"],
+            data.get("company", ""),
+            data.get("type", ""),
+            data.get("industry", ""),
+            data.get("location", ""),
+            data.get("notes", ""),
+            data.get("job_title", ""),
+            data.get("job_url", ""),
+            data.get("salary", ""),
+            data.get("status", "saved"),
+            tags,
+            now,
+        ),
+    )
+    db.commit()
+    row = db.execute("SELECT * FROM saved_jobs WHERE id = ?", (job_id,)).fetchone()
+    return jsonify(row_to_job(row)), 201
+
+
+@app.route("/api/jobs/<job_id>", methods=["PUT"])
+@require_auth
+def update_job(user, job_id):
+    db = get_db()
+    existing = db.execute(
+        "SELECT * FROM saved_jobs WHERE id = ? AND user_id = ?", (job_id, user["id"])
+    ).fetchone()
+    if not existing:
+        return jsonify({"error": "Not found"}), 404
+
+    data = request.get_json()
+    tags = json.dumps(data.get("tags") or [])
+    db.execute(
+        """UPDATE saved_jobs SET
+           company=?, type=?, industry=?, location=?, notes=?,
+           job_title=?, job_url=?, salary=?, status=?, tags=?
+           WHERE id = ? AND user_id = ?""",
+        (
+            data.get("company", ""),
+            data.get("type", ""),
+            data.get("industry", ""),
+            data.get("location", ""),
+            data.get("notes", ""),
+            data.get("job_title", ""),
+            data.get("job_url", ""),
+            data.get("salary", ""),
+            data.get("status", "saved"),
+            tags,
+            job_id,
+            user["id"],
+        ),
+    )
+    db.commit()
+    row = db.execute("SELECT * FROM saved_jobs WHERE id = ?", (job_id,)).fetchone()
+    return jsonify(row_to_job(row))
+
+
+@app.route("/api/jobs/<job_id>", methods=["DELETE"])
+@require_auth
+def delete_job(user, job_id):
+    db = get_db()
+    existing = db.execute(
+        "SELECT id FROM saved_jobs WHERE id = ? AND user_id = ?", (job_id, user["id"])
+    ).fetchone()
+    if not existing:
+        return jsonify({"error": "Not found"}), 404
+    db.execute("DELETE FROM saved_jobs WHERE id = ?", (job_id,))
+    db.commit()
+    return jsonify({"ok": True})
+
+
+# ---------------------------------------------------------------------------
+# Routes – Stats
+# ---------------------------------------------------------------------------
+
+@app.route("/api/stats", methods=["GET"])
+@require_auth
+def get_stats(user):
+    db = get_db()
+    rows = db.execute(
+        "SELECT status, location FROM saved_jobs WHERE user_id = ?", (user["id"],)
+    ).fetchall()
+
+    by_status: dict = {}
+    by_location: dict = {}
+    for r in rows:
+        s = r["status"] or "saved"
+        by_status[s] = by_status.get(s, 0) + 1
+        loc = r["location"] or "Unknown"
+        by_location[loc] = by_location.get(loc, 0) + 1
+
+    return jsonify({"total": len(rows), "by_status": by_status, "by_location": by_location})
+
+
+# ---------------------------------------------------------------------------
+# Routes – Excel Export
+# ---------------------------------------------------------------------------
+
+STATUS_COLORS = {
+    "saved": "3B82F6",
+    "applied": "F97316",
+    "interview": "22C55E",
+    "offer": "A855F7",
+    "rejected": "EF4444",
+}
+
+DARK_BG = "1a1a2e"
+HEADER_BG = "e94560"
+ROW_ALT = "16213e"
+ROW_MAIN = "0f3460"
+TEXT_WHITE = "FFFFFF"
+TEXT_LIGHT = "e2e8f0"
+
+
+def make_border():
+    side = Side(style="thin", color="2d3748")
+    return Border(left=side, right=side, top=side, bottom=side)
+
+
+@app.route("/api/jobs/export", methods=["GET"])
+@require_auth
+def export_jobs(user):
+    db = get_db()
+    rows = db.execute(
+        "SELECT * FROM saved_jobs WHERE user_id = ? ORDER BY created_at DESC",
+        (user["id"],),
+    ).fetchall()
+
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Job Tracker"
+
+    # ---- Title row ----
+    ws.merge_cells("A1:J1")
+    title_cell = ws["A1"]
+    title_cell.value = f"JobTracker Export — {user['username']} — {datetime.utcnow().strftime('%Y-%m-%d')}"
+    title_cell.font = Font(name="Calibri", bold=True, size=14, color=TEXT_WHITE)
+    title_cell.fill = PatternFill("solid", fgColor=HEADER_BG)
+    title_cell.alignment = Alignment(horizontal="center", vertical="center")
+    ws.row_dimensions[1].height = 28
+
+    # ---- Header row ----
+    headers = ["Company", "Job Title", "Type", "Industry", "Location", "Status", "Salary", "Notes", "URL", "Saved On"]
+    col_widths = [22, 26, 18, 20, 18, 12, 14, 35, 35, 16]
+
+    for col_idx, (header, width) in enumerate(zip(headers, col_widths), start=1):
+        cell = ws.cell(row=2, column=col_idx, value=header)
+        cell.font = Font(name="Calibri", bold=True, size=11, color=TEXT_WHITE)
+        cell.fill = PatternFill("solid", fgColor="2d1b4e")
+        cell.alignment = Alignment(horizontal="center", vertical="center")
+        cell.border = make_border()
+        ws.column_dimensions[get_column_letter(col_idx)].width = width
+
+    ws.row_dimensions[2].height = 22
+
+    # ---- Data rows ----
+    for row_num, job in enumerate(rows, start=3):
+        is_alt = (row_num % 2 == 0)
+        bg = ROW_ALT if is_alt else ROW_MAIN
+        status = (job["status"] or "saved").lower()
+        status_color = STATUS_COLORS.get(status, "3B82F6")
+
+        saved_on = (job["created_at"] or "")[:10]
+
+        values = [
+            job["company"],
+            job["job_title"],
+            job["type"],
+            job["industry"],
+            job["location"],
+            (job["status"] or "saved").capitalize(),
+            job["salary"],
+            job["notes"],
+            job["job_url"],
+            saved_on,
+        ]
+
+        for col_idx, value in enumerate(values, start=1):
+            cell = ws.cell(row=row_num, column=col_idx, value=value)
+            cell.font = Font(name="Calibri", size=10, color=TEXT_LIGHT)
+            cell.alignment = Alignment(vertical="center", wrap_text=(col_idx in (8, 9)))
+            cell.border = make_border()
+
+            if col_idx == 6:
+                cell.fill = PatternFill("solid", fgColor=status_color)
+                cell.font = Font(name="Calibri", bold=True, size=10, color=TEXT_WHITE)
+                cell.alignment = Alignment(horizontal="center", vertical="center")
+            else:
+                cell.fill = PatternFill("solid", fgColor=bg)
+
+        ws.row_dimensions[row_num].height = 18
+
+    # ---- Freeze top 2 rows ----
+    ws.freeze_panes = "A3"
+
+    # ---- Tab color ----
+    ws.sheet_properties.tabColor = HEADER_BG
+
+    buf = BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+    filename = f"jobtracker_{user['username']}_{datetime.utcnow().strftime('%Y%m%d')}.xlsx"
+    return send_file(
+        buf,
+        as_attachment=True,
+        download_name=filename,
+        mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    )
+
+
+# ---------------------------------------------------------------------------
+# Entrypoint
+# ---------------------------------------------------------------------------
+
+if __name__ == "__main__":
+    init_db()
+    app.run(debug=True, port=5000)
