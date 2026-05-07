@@ -1,4 +1,4 @@
-# JobTracker 🎯
+# JobTracker 
 
 Multi-user job tracking app for data science / AI job seekers.
 
